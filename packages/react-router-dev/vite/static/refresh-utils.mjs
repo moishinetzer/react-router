@@ -47,9 +47,9 @@ const enqueueUpdate = debounce(async () => {
       Array.from(routeUpdates.values())
         .filter(
           (route) =>
-            route.hasLoader ||
-            route.hasClientLoader ||
-            route.hasClientMiddleware,
+            route.loaderChanged ||
+            route.clientLoaderChanged ||
+            route.clientMiddlewareChanged,
         )
         .map((route) => route.id),
     );

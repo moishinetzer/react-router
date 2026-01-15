@@ -240,11 +240,27 @@ async function workflow({
   await expect(hdrStatus).toHaveText("HDR updated: 1");
   await expect(input).toHaveValue("stateful");
 
+  // route: HMR only (component change, no HDR)
+  // This tests that changing ONLY the component does NOT trigger loader revalidation
+  await edit({
+    "app/routes/_index.tsx": (contents) =>
+      contents
+        // Change component text only
+        .replace("HMR updated: 1", "HMR updated: 1.5"),
+        // The loader code itself doesn't change, only the component
+  });
+  await page.waitForLoadState("networkidle");
+  await expect(hmrStatus).toHaveText("HMR updated: 1.5");
+  // HDR status should NOT have changed - loader shouldn't have re-run
+  await expect(hdrStatus).toHaveText("HDR updated: 1");
+  await expect(input).toHaveValue("stateful");
+  expect(page.errors).toEqual([]);
+
   // route: HMR + HDR
   await edit({
     "app/routes/_index.tsx": (contents) =>
       contents
-        .replace("HMR updated: 1", "HMR updated: 2")
+        .replace("HMR updated: 1.5", "HMR updated: 2")
         .replace("HDR updated: 1", "HDR updated: 2"),
   });
   await page.waitForLoadState("networkidle");

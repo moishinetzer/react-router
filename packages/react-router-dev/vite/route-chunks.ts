@@ -29,7 +29,10 @@ function codeToAst(code: string, cache: Cache, cacheKey: string): Babel.File {
   // We use structuredClone to allow AST mutation without modifying the cache.
   return structuredClone(
     getOrSetFromCache(cache, `${cacheKey}::codeToAst`, code, () =>
-      parse(code, { sourceType: "module" }),
+      parse(code, {
+        sourceType: "module",
+        plugins: ["jsx", "typescript"],
+      }),
     ),
   );
 }
@@ -1003,4 +1006,44 @@ export function getRouteChunkNameFromModuleId(
   }
 
   return chunkName;
+}
+
+/**
+ * Extracts the code for a specific export and its dependencies.
+ * Unlike getChunkedExport, this works even for non-chunkable exports
+ * (exports that share code with other exports).
+ */
+export function getExportCode(
+  code: string,
+  exportName: string,
+  cache: Cache,
+  cacheKey: string,
+): string | undefined {
+  return getOrSetFromCache(
+    cache,
+    `${cacheKey}::getExportCode::${exportName}`,
+    code,
+    () => {
+      let exportDependencies = getExportDependencies(code, cache, cacheKey);
+      let dependencies = exportDependencies.get(exportName);
+
+      if (!dependencies) {
+        return undefined;
+      }
+
+      let statements = Array.from(dependencies.topLevelStatements);
+      let ast = codeToAst(code, cache, cacheKey);
+
+      // Filter AST to only the statements this export depends on
+      ast.program.body = ast.program.body.filter((node) =>
+        statements.some((statement) => t.isNodesEquivalent(node, statement)),
+      );
+
+      if (ast.program.body.length === 0) {
+        return undefined;
+      }
+
+      return generate(ast).code;
+    },
+  );
 }

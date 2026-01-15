@@ -69,6 +69,7 @@ import {
   isRouteChunkModuleId,
   getRouteChunkModuleId,
   getRouteChunkNameFromModuleId,
+  getExportCode,
 } from "./route-chunks";
 import { preloadVite, getVite } from "./vite";
 import {
@@ -1112,6 +1113,8 @@ export const reactRouterVitePlugin: ReactRouterVitePlugin = () => {
 
   // In dev, the server and browser manifests are the same
   let currentReactRouterManifestForDev: ReactRouterManifest | null = null;
+  // Cache of route file source code for HMR change detection
+  let routeCodeCache: Map<string, string> = new Map();
   let getReactRouterManifestForDev = async (): Promise<ReactRouterManifest> => {
     let routes: ReactRouterManifest["routes"] = {};
 
@@ -2402,7 +2405,15 @@ export const reactRouterVitePlugin: ReactRouterVitePlugin = () => {
       async handleHotUpdate({ server, file, modules, read }) {
         let route = getRoute(ctx.reactRouterConfig, file);
 
-        type HmrEventData = { route: ManifestRoute | null };
+        type HmrEventData = {
+          route: (ManifestRoute & {
+            loaderChanged?: boolean;
+            actionChanged?: boolean;
+            clientLoaderChanged?: boolean;
+            clientActionChanged?: boolean;
+            clientMiddlewareChanged?: boolean;
+          }) | null;
+        };
         let hmrEventData: HmrEventData = { route: null };
 
         if (route) {
@@ -2417,7 +2428,65 @@ export const reactRouterVitePlugin: ReactRouterVitePlugin = () => {
             read,
           );
 
-          hmrEventData.route = newRouteMetadata;
+          // Read new file content for change detection
+          let newCode = await read();
+          let oldCode = routeCodeCache.get(route.id);
+
+          // Compute change flags
+          let loaderChanged = false;
+          let actionChanged = false;
+          let clientLoaderChanged = false;
+          let clientActionChanged = false;
+          let clientMiddlewareChanged = false;
+
+          if (!oldRouteMetadata || !oldCode) {
+            // New route or first load - consider data exports changed if they exist
+            loaderChanged = newRouteMetadata.hasLoader;
+            actionChanged = newRouteMetadata.hasAction;
+            clientLoaderChanged = newRouteMetadata.hasClientLoader;
+            clientActionChanged = newRouteMetadata.hasClientAction;
+            clientMiddlewareChanged = newRouteMetadata.hasClientMiddleware;
+          } else {
+            // Compare loader code
+            if (oldRouteMetadata.hasLoader !== newRouteMetadata.hasLoader) {
+              // Loader added or removed
+              loaderChanged = true;
+            } else if (newRouteMetadata.hasLoader) {
+              // Both have loader - compare code
+              let oldLoaderCode = getExportCode(oldCode, "loader", cache, `${route.id}:old`);
+              let newLoaderCode = getExportCode(newCode, "loader", cache, `${route.id}:new`);
+              loaderChanged = oldLoaderCode !== newLoaderCode;
+            }
+
+            // Compare action code
+            if (oldRouteMetadata.hasAction !== newRouteMetadata.hasAction) {
+              actionChanged = true;
+            } else if (newRouteMetadata.hasAction) {
+              let oldActionCode = getExportCode(oldCode, "action", cache, `${route.id}:old`);
+              let newActionCode = getExportCode(newCode, "action", cache, `${route.id}:new`);
+              actionChanged = oldActionCode !== newActionCode;
+            }
+
+            // For client-side exports, compare module URLs (they're chunked separately)
+            clientLoaderChanged =
+              oldRouteMetadata.clientLoaderModule !== newRouteMetadata.clientLoaderModule;
+            clientActionChanged =
+              oldRouteMetadata.clientActionModule !== newRouteMetadata.clientActionModule;
+            clientMiddlewareChanged =
+              oldRouteMetadata.clientMiddlewareModule !== newRouteMetadata.clientMiddlewareModule;
+          }
+
+          // Update code cache
+          routeCodeCache.set(route.id, newCode);
+
+          hmrEventData.route = {
+            ...newRouteMetadata,
+            loaderChanged,
+            actionChanged,
+            clientLoaderChanged,
+            clientActionChanged,
+            clientMiddlewareChanged,
+          };
 
           if (
             !oldRouteMetadata ||
